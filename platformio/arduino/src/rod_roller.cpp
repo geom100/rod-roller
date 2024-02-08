@@ -228,7 +228,7 @@ protected:
 
     _oled.setScale(1);
     _oled.setCursorXY(102, 8);
-    int8_t arrow_dir = (_state & (1 << _STEPPER_DIR_BIT)) ? 0 : 1;
+    int8_t arrow_dir = (_state & (1 << _STEPPER_DIR_BIT)) ? 1 : 0;
     for (int8_t i = 0; i < 7; i++) {
       uint8_t b = (_state & (1 << _STEPPER_ENABLE_BIT)) ? pgm_read_byte(&(_s_icons[arrow_dir][i])) : 0;
       _oled.drawByte(b);
