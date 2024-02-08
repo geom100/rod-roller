@@ -33,8 +33,8 @@ typedef GyverOLED<SSD1306_128x64, OLED_NO_BUFFER> OLED;
 #define MAX_RPM 50
 #define DEFAULT_RPM 30
 // #define STEPS_PER_TURN (200)
-#define STEPS_PER_TURN (1600)
-// #define STEPS_PER_TURN (3200)
+// #define STEPS_PER_TURN (1600)
+#define STEPS_PER_TURN (3200)
 // #define STEPS_PER_TURN (6400)
 // #define STEPS_PER_TURN 10
 // #define STEP_DURATION 10
@@ -46,7 +46,7 @@ uint32_t debugTimer = 0;
 char debug_buffer[128];
 #endif
 
-const static uint8_t PROGMEM _s_icons[][8] =
+const static uint8_t PROGMEM _s_icons[][7] =
 {
     {0x40, 0x20, 0x11, 0x09, 0x05, 0x03, 0x1F}, // Стрелка вверх 
     {0x7C, 0x60, 0x50, 0x48, 0x44, 0x02, 0x01} // Стрелка вниз 
@@ -133,8 +133,9 @@ public:
         _stepper_rpm = constrain(newRpm, MIN_RPM, MAX_RPM);
         _state |= (1 << _OLED_UPDATE_BIT);
       } else if (_encoder.turn()) {
+        int dir = _debouncer.event(_encoder.dir());
         if (_state & (1 << _STEPPER_ENABLE_BIT)) {
-          int dir = _debouncer.event(_encoder.dir());
+          // int dir = _debouncer.event(_encoder.dir());
 #ifdef MYDEBUG
           sprintf(debug_buffer, "Stepper is on, encoder dir %d", dir);
           Serial.println(debug_buffer);
@@ -148,26 +149,39 @@ public:
             digitalWrite(PIN_STEPPER_ENA, !(_state & (1 << _STEPPER_ENABLE_BIT)));  // ENA has reversed logic.
             _state |= (1 << _OLED_UPDATE_BIT);
           }
+#ifdef MYDEBUG
+            sprintf(debug_buffer, "On: Ena is %d, dir %d", _state & (1 << _STEPPER_ENABLE_BIT), _state & (1 << _STEPPER_DIR_BIT));
+            Serial.println(debug_buffer);
+#endif
         } else {
-          int dir = _debouncer.event(_encoder.dir());
+          // int dir = _debouncer.event(_encoder.dir());
 #ifdef MYDEBUG
           sprintf(debug_buffer, "Stepper is off, encoder dir %d", dir);
           Serial.println(debug_buffer);
 #endif
           if (dir) {
-            if (dir + 1) {
+            // if (dir + 1) {
+            //   _state &= ~(1 << _STEPPER_DIR_BIT);
+            // } else {
+            //   _state |= (1 << _STEPPER_DIR_BIT);
+            // }
+            if (dir > 0) {
               _state &= ~(1 << _STEPPER_DIR_BIT);
             } else {
               _state |= (1 << _STEPPER_DIR_BIT);
             }
 #ifdef MYDEBUG
-            sprintf(debug_buffer, "Stepper is off, stepper dir %d", _state & (1 << _STEPPER_DIR_BIT));
+            sprintf(debug_buffer, "Stepper is off stepper dir %d state %d", _state & (1 << _STEPPER_DIR_BIT), _state);
             Serial.println(debug_buffer);
 #endif
             digitalWrite(PIN_STEPPER_DIR, _state & (1 << _STEPPER_DIR_BIT));
             _state ^= (1 << _STEPPER_ENABLE_BIT);
             digitalWrite(PIN_STEPPER_ENA, !(_state & (1 << _STEPPER_ENABLE_BIT)));  // ENA has reversed logic.
             _state |= (1 << _OLED_UPDATE_BIT);
+#ifdef MYDEBUG
+            sprintf(debug_buffer, "Off: Ena is %d dir %d state %d", _state & (1 << _STEPPER_ENABLE_BIT), _state & (1 << _STEPPER_DIR_BIT)), _state;
+            Serial.println(debug_buffer);
+#endif
           }
         }
       }
@@ -209,12 +223,14 @@ protected:
     _oled.setCursorXY(8, 8);
     _oled.print("      ");
 
+    _oled.setCursorXY(8, 8);
     _oled.print(t);
 
-    _oled.setCursor(102, 8);
-    int8_t arrow_dir = (_state & _STEPPER_DIR_BIT) ? 0 : 1;
+    _oled.setScale(1);
+    _oled.setCursorXY(102, 8);
+    int8_t arrow_dir = (_state & (1 << _STEPPER_DIR_BIT)) ? 0 : 1;
     for (int8_t i = 0; i < 7; i++) {
-      uint8_t b = (_state & _STEPPER_ENABLE_BIT) ? pgm_read_byte(&(_s_icons[arrow_dir][i])) : 0;
+      uint8_t b = (_state & (1 << _STEPPER_ENABLE_BIT)) ? pgm_read_byte(&(_s_icons[arrow_dir][i])) : 0;
       _oled.drawByte(b);
     }
 #ifdef MYDEBUG
@@ -232,7 +248,7 @@ private:
   uint8_t _state = 0;
 
   static constexpr uint8_t _STEPPER_ENABLE_BIT = 0;
-  static constexpr uint8_t _STEPPER_DIR_BIT = 0;
+  static constexpr uint8_t _STEPPER_DIR_BIT = 1;
   static constexpr uint8_t _STEPPER_STATE_BIT = 2;
   static constexpr uint8_t _OLED_UPDATE_BIT = 3;
   static constexpr uint8_t _EEPROM_UPDATE_BIT = 4;
