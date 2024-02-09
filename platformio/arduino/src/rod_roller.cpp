@@ -15,6 +15,7 @@
 
 #include <EncButton.h>
 #include <GyverOLED.h>
+#include <GyverTimers.h>
 
 typedef GyverOLED<SSD1306_128x64, OLED_NO_BUFFER> OLED;
 
@@ -52,12 +53,26 @@ const static uint8_t PROGMEM _s_icons[][7] =
     {0x7C, 0x60, 0x50, 0x48, 0x44, 0x02, 0x01} // Стрелка вниз 
 };
 
+
+enum class StepperDir {
+  Toggle = 0,
+  Forward = 1,
+  Backward = -1,
+  None = 127
+};
+
+enum class StateOp {
+  On = 0,
+  Off = 1,
+  Toggle = 2
+};
+
 template<uint16_t TIMEOUT, uint8_t COUNT>
 class Debouncer {
 public:
   Debouncer()
     : _counter(0), _timer(millis()) {}
-  int event(int dir) {
+  int8_t event(int8_t dir) {
     if (_counter == 0 && millis() - _timer <= TIMEOUT) {
       _timer = millis();
       return 0;
@@ -101,6 +116,10 @@ public:
     digitalWrite(PIN_STEPPER_M1, 0);
     digitalWrite(PIN_STEPPER_M2, 1);
 
+    Timer2.outputEnable(CHANNEL_B, TOGGLE_PIN);
+    Timer2.setPeriod(delayFromRPM());
+    Timer2.stop();
+
     _encoder.setEncType(EB_STEP4_LOW);
     _encoder.setEncReverse(true);
 
@@ -124,60 +143,46 @@ public:
 
   void tick() {
     if (_encoder.tick()) {
-#ifdef MYDEBUG
-      Serial.println("Encoder tick");
-      Serial.println(delayFromRPM());
-#endif
       if (_encoder.turn() && _encoder.pressing()) {
         int newRpm = _stepper_rpm + (_encoder.fast() ? fastStep() : 1) * _encoder.dir();
         _stepper_rpm = constrain(newRpm, MIN_RPM, MAX_RPM);
-        _state |= (1 << _OLED_UPDATE_BIT);
+        Timer2.setPeriod(delayFromRPM());
+        setState<StateOp::On>(_OLED_UPDATE_BIT);
       } else if (_encoder.turn()) {
         int dir = _debouncer.event(_encoder.dir());
-        if (_state & (1 << _STEPPER_ENABLE_BIT)) {
-          // int dir = _debouncer.event(_encoder.dir());
+        if (isState(_STEPPER_ENABLE_BIT)) {
 #ifdef MYDEBUG
           sprintf(debug_buffer, "Stepper is on, encoder dir %d", dir);
           Serial.println(debug_buffer);
 #endif
           if (dir > 0) {
-            _state ^= (1 << _STEPPER_DIR_BIT);
-            digitalWrite(PIN_STEPPER_DIR, _state & (1 << _STEPPER_DIR_BIT));
-            _state |= (1 << _OLED_UPDATE_BIT);
+            stepper_dir<StepperDir::Toggle>();
+            setState<StateOp::On>(_OLED_UPDATE_BIT);
           } else if (dir < 0) {
-            _state ^= (1 << _STEPPER_ENABLE_BIT);
-            digitalWrite(PIN_STEPPER_ENA, !(_state & (1 << _STEPPER_ENABLE_BIT)));  // ENA has reversed logic.
-            _state |= (1 << _OLED_UPDATE_BIT);
+            stepper_toggle();
+            setState<StateOp::On>(_OLED_UPDATE_BIT);
           }
 #ifdef MYDEBUG
             sprintf(debug_buffer, "On: Ena is %d, dir %d", _state & (1 << _STEPPER_ENABLE_BIT), _state & (1 << _STEPPER_DIR_BIT));
             Serial.println(debug_buffer);
 #endif
         } else {
-          // int dir = _debouncer.event(_encoder.dir());
 #ifdef MYDEBUG
           sprintf(debug_buffer, "Stepper is off, encoder dir %d", dir);
           Serial.println(debug_buffer);
 #endif
           if (dir) {
-            // if (dir + 1) {
-            //   _state &= ~(1 << _STEPPER_DIR_BIT);
-            // } else {
-            //   _state |= (1 << _STEPPER_DIR_BIT);
-            // }
             if (dir > 0) {
-              _state &= ~(1 << _STEPPER_DIR_BIT);
+              stepper_dir<StepperDir::Forward>();
             } else {
-              _state |= (1 << _STEPPER_DIR_BIT);
+              stepper_dir<StepperDir::Backward>();
             }
 #ifdef MYDEBUG
             sprintf(debug_buffer, "Stepper is off stepper dir %d state %d", _state & (1 << _STEPPER_DIR_BIT), _state);
             Serial.println(debug_buffer);
 #endif
-            digitalWrite(PIN_STEPPER_DIR, _state & (1 << _STEPPER_DIR_BIT));
-            _state ^= (1 << _STEPPER_ENABLE_BIT);
-            digitalWrite(PIN_STEPPER_ENA, !(_state & (1 << _STEPPER_ENABLE_BIT)));  // ENA has reversed logic.
-            _state |= (1 << _OLED_UPDATE_BIT);
+            stepper_toggle();
+            setState<StateOp::On>(_OLED_UPDATE_BIT);
 #ifdef MYDEBUG
             sprintf(debug_buffer, "Off: Ena is %d dir %d state %d", _state & (1 << _STEPPER_ENABLE_BIT), _state & (1 << _STEPPER_DIR_BIT)), _state;
             Serial.println(debug_buffer);
@@ -190,22 +195,67 @@ public:
     if (_state & (1 << _OLED_UPDATE_BIT) && millis() - _oledTimer >= 100) {
       _oledTimer = millis();  // сбросить таймер
       update_oled_state();
-      _state &= ~(1 << _OLED_UPDATE_BIT);
+      setState<StateOp::Off>(_OLED_UPDATE_BIT);
     }
 
-    if (_state & (1 << _STEPPER_ENABLE_BIT)) {
-      uint32_t mnow = micros();
-      if (mnow - _stepTimer >= delayFromRPM()) {
-        _stepTimer = mnow;                                                   // сбросить таймер
-        digitalWrite(PIN_STEPPER_STEP, _state & (1 << _STEPPER_STATE_BIT));  // вкл/выкл
-        _state ^= (1 << _STEPPER_STATE_BIT);  // инвертировать флаг
-      }
-    }
   }
 
 protected:
   inline uint32_t delayFromRPM() {
     return ((uint32_t)60 * 1000 * 1000) / _stepper_rpm / STEPS_PER_TURN / 2;  // 50% duty cycle
+  }
+
+
+  template<StateOp op>
+  inline void setState(uint8_t bit) {
+    switch (op)
+    {
+    case StateOp::On:
+      _state |= (1 << bit);
+      break;
+    case StateOp::Off:
+      _state &= ~(1 << bit);
+      break;
+    case StateOp::Toggle:
+        _state ^= (1 << bit);  // инвертировать флаг
+      break;
+    
+    default:
+      break;
+    }
+  }
+
+  inline bool isState(uint8_t bit) {
+    return (_state & (1 << bit));
+  } 
+
+  template <StepperDir dir>
+  void stepper_dir() {
+    switch (dir)
+    {
+      case StepperDir::Toggle:
+        _state ^= (1 << _STEPPER_DIR_BIT);
+        break;
+      case StepperDir::Forward:
+      _state &= ~(1 << _STEPPER_DIR_BIT);
+        break;
+      case StepperDir::Backward:
+      _state |= (1 << _STEPPER_DIR_BIT);
+        break;
+      default:
+        break;
+    }
+    digitalWrite(PIN_STEPPER_DIR, _state & (1 << _STEPPER_DIR_BIT));
+  }
+
+  void stepper_toggle() {
+    _state ^= (1 << _STEPPER_ENABLE_BIT);
+    digitalWrite(PIN_STEPPER_ENA, !(_state & (1 << _STEPPER_ENABLE_BIT))); // ENA has reversed logic.
+    if (isState(_STEPPER_ENABLE_BIT)) {
+      Timer2.restart();
+    } else {
+      Timer2.stop();
+    }
   }
 
   inline int fastStep() {
@@ -240,8 +290,6 @@ protected:
 
 private:
   uint8_t _stepper_rpm = DEFAULT_RPM;
-
-  uint32_t _stepTimer = 0;
 
   uint32_t _oledTimer = 0;
 
