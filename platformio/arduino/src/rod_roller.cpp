@@ -33,12 +33,7 @@ typedef GyverOLED<SSD1306_128x64, OLED_NO_BUFFER> OLED;
 #define MIN_RPM 1
 #define MAX_RPM 50
 #define DEFAULT_RPM 30
-// #define STEPS_PER_TURN (200)
-// #define STEPS_PER_TURN (1600)
 #define STEPS_PER_TURN (3200)
-// #define STEPS_PER_TURN (6400)
-// #define STEPS_PER_TURN 10
-// #define STEP_DURATION 10
 
 // #define MYDEBUG 1
 
@@ -109,8 +104,8 @@ public:
     pinMode(PIN_STEPPER_M1, OUTPUT);
     pinMode(PIN_STEPPER_M2, OUTPUT);
 
-    digitalWrite(PIN_STEPPER_ENA, !(_state & (1 << _STEPPER_ENABLE_BIT)));
-    digitalWrite(PIN_STEPPER_DIR, _state & (1 << _STEPPER_DIR_BIT));
+    digitalWrite(PIN_STEPPER_ENA, !(isState(_STEPPER_ENABLE_BIT)));
+    digitalWrite(PIN_STEPPER_DIR, isState(_STEPPER_DIR_BIT));
 
     digitalWrite(PIN_STEPPER_M0, 0);
     digitalWrite(PIN_STEPPER_M1, 0);
@@ -127,14 +122,7 @@ public:
     _oled.clear();  // очистка
 
     _oled.roundRect(0, 0, 88, 31, OLED_STROKE);
-    // _oled.setCursorXY(2, 8)
-    // _oled.print("RPM:");
-    // _oled.setCursor(0, 4);
-    // _oled.print("DIR:");
-    // _oled.dot(30, 29);
-    // _oled.fastLineH(29, 30, 30);
-
-    update_oled_state();
+    updateOLEDState();
 
 #ifdef MYDEBUG
     Serial.println("Starting...");
@@ -156,10 +144,10 @@ public:
           Serial.println(debug_buffer);
 #endif
           if (dir > 0) {
-            stepper_dir<StepperDir::Toggle>();
+            changeStepperDir<StepperDir::Toggle>();
             setState<StateOp::On>(_OLED_UPDATE_BIT);
           } else if (dir < 0) {
-            stepper_toggle();
+            toggleStepper();
             setState<StateOp::On>(_OLED_UPDATE_BIT);
           }
 #ifdef MYDEBUG
@@ -173,15 +161,15 @@ public:
 #endif
           if (dir) {
             if (dir > 0) {
-              stepper_dir<StepperDir::Forward>();
+              changeStepperDir<StepperDir::Forward>();
             } else {
-              stepper_dir<StepperDir::Backward>();
+              changeStepperDir<StepperDir::Backward>();
             }
 #ifdef MYDEBUG
             sprintf(debug_buffer, "Stepper is off stepper dir %d state %d", _state & (1 << _STEPPER_DIR_BIT), _state);
             Serial.println(debug_buffer);
 #endif
-            stepper_toggle();
+            toggleStepper();
             setState<StateOp::On>(_OLED_UPDATE_BIT);
 #ifdef MYDEBUG
             sprintf(debug_buffer, "Off: Ena is %d dir %d state %d", _state & (1 << _STEPPER_ENABLE_BIT), _state & (1 << _STEPPER_DIR_BIT)), _state;
@@ -192,9 +180,9 @@ public:
       }
     }
 
-    if (_state & (1 << _OLED_UPDATE_BIT) && millis() - _oledTimer >= 100) {
+    if (isState(_OLED_UPDATE_BIT) && millis() - _oledTimer >= 100) {
       _oledTimer = millis();  // сбросить таймер
-      update_oled_state();
+      updateOLEDState();
       setState<StateOp::Off>(_OLED_UPDATE_BIT);
     }
 
@@ -230,7 +218,7 @@ protected:
   } 
 
   template <StepperDir dir>
-  void stepper_dir() {
+  void changeStepperDir() {
     switch (dir)
     {
       case StepperDir::Toggle:
@@ -248,9 +236,9 @@ protected:
     digitalWrite(PIN_STEPPER_DIR, _state & (1 << _STEPPER_DIR_BIT));
   }
 
-  void stepper_toggle() {
-    _state ^= (1 << _STEPPER_ENABLE_BIT);
-    digitalWrite(PIN_STEPPER_ENA, !(_state & (1 << _STEPPER_ENABLE_BIT))); // ENA has reversed logic.
+  void toggleStepper() {
+    setState<StateOp::Toggle>(_STEPPER_ENABLE_BIT);
+    digitalWrite(PIN_STEPPER_ENA, !(isState(_STEPPER_ENABLE_BIT))); // ENA has reversed logic.
     if (isState(_STEPPER_ENABLE_BIT)) {
       Timer2.restart();
     } else {
@@ -262,9 +250,9 @@ protected:
     return _stepper_rpm >= 20 ? 5 : (_stepper_rpm > 10 ? 2 : 1);
   }
 
-  void update_oled_state() {
+  void updateOLEDState() {
     char t[7];
-    if (_state & (1 << _STEPPER_ENABLE_BIT)) {
+    if (isState(_STEPPER_ENABLE_BIT)) {
       sprintf(t, "%d RPM", _stepper_rpm);
     } else {
       sprintf(t, " STOP ");
@@ -278,9 +266,9 @@ protected:
 
     _oled.setScale(1);
     _oled.setCursorXY(102, 8);
-    int8_t arrow_dir = (_state & (1 << _STEPPER_DIR_BIT)) ? 1 : 0;
+    int8_t arrow_dir = (isState(_STEPPER_DIR_BIT)) ? 1 : 0;
     for (int8_t i = 0; i < 7; i++) {
-      uint8_t b = (_state & (1 << _STEPPER_ENABLE_BIT)) ? pgm_read_byte(&(_s_icons[arrow_dir][i])) : 0;
+      uint8_t b = (isState(_STEPPER_ENABLE_BIT)) ? pgm_read_byte(&(_s_icons[arrow_dir][i])) : 0;
       _oled.drawByte(b);
     }
 #ifdef MYDEBUG
