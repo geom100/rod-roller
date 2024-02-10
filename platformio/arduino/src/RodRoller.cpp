@@ -8,10 +8,16 @@
 char debug_buffer[128];
 #endif
 
-const static uint8_t PROGMEM _s_icons[][7] =
+const static uint8_t PROGMEM _s_arrows[][28] =
 {
-    {0x40, 0x20, 0x11, 0x09, 0x05, 0x03, 0x1F}, // Стрелка вверх 
-    {0x7C, 0x60, 0x50, 0x48, 0x44, 0x02, 0x01} // Стрелка вниз 
+    { 0x00, 0x00, 0x00, 0x00, 0x01, 0x83, 0xC3, 0xE3,
+      0x73, 0x3B, 0x1F, 0x0F, 0xFF, 0xFF, 0x30, 0x38,
+      0x1C, 0x0E, 0x07, 0x03, 0x01, 0x00, 0x00, 0x00,
+      0x00, 0x00, 0x01, 0x03}, // Стрелка вверх
+    { 0xF0, 0xE0, 0x00, 0x00, 0x00, 0x80, 0xC0, 0xE0,
+      0x70, 0x38, 0x1C, 0x0E, 0x07, 0x03, 0x3F, 0x3F,
+      0x3C, 0x3E, 0x37, 0x33, 0x31, 0x30, 0x20, 0x20,
+      0x00, 0x00, 0x00, 0x00} // Стрелка вниз
 };
 
 void Stepper::init() {
@@ -153,25 +159,20 @@ void RodRoller::tick() {
 void RodRoller::updateOLEDState() {
   char t[7];
   if (_state.is(_STEPPER_ENABLE_BIT)) {
-    sprintf(t, "%d RPM", _stepper.currentRPM());
+    sprintf(t, "%02d RPM", _stepper.currentRPM());
   } else {
     sprintf(t, " STOP ");
   }
   _oled.setScale(2);
-  _oled.setCursorXY(8, 8);
-  _oled.print("      ");
 
   _oled.setCursorXY(8, 8);
   _oled.print(t);
 
-  _oled.setScale(1);
-  _oled.setCursorXY(102, 8);
-  int8_t arrow_dir = (_state.is(_STEPPER_DIR_BIT)) ? 1 : 0;
-  for (int8_t i = 0; i < 7; i++) {
-    uint8_t b = (_state.is(_STEPPER_ENABLE_BIT))
-                    ? pgm_read_byte(&(_s_icons[arrow_dir][i]))
-                    : 0;
-    _oled.drawByte(b);
+  if (_state.is(_STEPPER_ENABLE_BIT)) {
+    int8_t arrow_dir = (_state.is(_STEPPER_DIR_BIT)) ? 1 : 0;
+    _oled.drawBitmap(102, 8, _s_arrows[arrow_dir], 14, 14);
+  } else {
+    _oled.clear(102, 8, 102 + 14, 8 + 14);
   }
 #ifdef MYDEBUG
   Serial.println("OLED updated");
