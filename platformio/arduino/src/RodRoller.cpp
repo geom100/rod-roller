@@ -1,10 +1,10 @@
 #include <RodRoller.h>
 #include <GyverTimers.h>
+#include <GyverIO.h>
 
 // #define MYDEBUG 1
 
 #ifdef MYDEBUG
-uint32_t debugTimer = 0;
 char debug_buffer[128];
 #endif
 
@@ -14,34 +14,66 @@ const static uint8_t PROGMEM _s_icons[][7] =
     {0x7C, 0x60, 0x50, 0x48, 0x44, 0x02, 0x01} // Стрелка вниз 
 };
 
+void Stepper::init() {
+    gio::mode(Pins::PIN_STEPPER_STEP, OUTPUT);
+    gio::mode(Pins::PIN_STEPPER_DIR, OUTPUT);
+    gio::mode(Pins::PIN_STEPPER_ENA, OUTPUT);
+    gio::mode(Pins::PIN_STEPPER_M0, OUTPUT);
+    gio::mode(Pins::PIN_STEPPER_M1, OUTPUT);
+    gio::mode(Pins::PIN_STEPPER_M2, OUTPUT);
 
-RodRoller::RodRoller()
-    : _encoder(PIN_ENC_1, PIN_ENC_2, PIN_ENC_KEY, INPUT, INPUT_PULLUP, LOW) {}
-
-void RodRoller::init() {
-    pinMode(PIN_STEPPER_STEP, OUTPUT);
-    pinMode(PIN_STEPPER_DIR, OUTPUT);
-    pinMode(PIN_STEPPER_ENA, OUTPUT);
-    pinMode(PIN_STEPPER_M0, OUTPUT);
-    pinMode(PIN_STEPPER_M1, OUTPUT);
-    pinMode(PIN_STEPPER_M2, OUTPUT);
-
-    digitalWrite(PIN_STEPPER_ENA, !(_state.is(_STEPPER_ENABLE_BIT)));
-    digitalWrite(PIN_STEPPER_DIR, _state.is(_STEPPER_DIR_BIT));
-
-    digitalWrite(PIN_STEPPER_M0, 0);
-    digitalWrite(PIN_STEPPER_M1, 0);
-    digitalWrite(PIN_STEPPER_M2, 1);
+    // Pins are connected to driver switches on the board.
+    gio::low(Pins::PIN_STEPPER_M0);
+    gio::low(Pins::PIN_STEPPER_M1);
+    gio::high(Pins::PIN_STEPPER_M2);
 
     Timer2.outputEnable(CHANNEL_B, TOGGLE_PIN);
     Timer2.setPeriod(delayFromRPM());
     Timer2.stop();
+}
+
+void Stepper::rpm(int8_t updown, bool fast) {
+      // Intentionally unsafe! So we save a couple of processor tacts.
+      // To check updown like this is much safer: 
+      // int8_t signum = ((updown > 0) - (updown < 0));
+      int newRpm =
+          _stepperRPM + (fast ? fastStep() : 1) * updown;
+      _stepperRPM = constrain(newRpm, MIN_RPM, MAX_RPM);
+      Timer2.setPeriod(delayFromRPM());
+}
+
+void Stepper::dir(bool dir) {
+  gio::write(Pins::PIN_STEPPER_DIR, dir);
+}
+
+void Stepper::ena(bool ena) {
+  gio::write(Pins::PIN_STEPPER_ENA, !ena); // ENA has reversed logic.
+  if (ena) {
+    Timer2.restart();
+  } else {
+    Timer2.stop();
+  }
+}
+
+inline uint32_t Stepper::delayFromRPM() {
+  return ((uint32_t)60 * 1000 * 1000) / _stepperRPM / STEPS_PER_TURN /
+         2; // 50% duty cycle
+}
+
+inline int Stepper::fastStep() {
+  return _stepperRPM >= 20 ? 5 : (_stepperRPM > 10 ? 2 : 1);
+}
+
+void RodRoller::init() {
+    _stepper.init();
+    _stepper.dir(_state.is(_STEPPER_DIR_BIT));
+    _stepper.ena(_state.is(_STEPPER_ENABLE_BIT));
 
     _encoder.setEncType(EB_STEP4_LOW);
     _encoder.setEncReverse(true);
 
-    _oled.init();   // инициализация
-    _oled.clear();  // очистка
+    _oled.init();
+    _oled.clear();
 
     _oled.roundRect(0, 0, 88, 31, OLED_STROKE);
     updateOLEDState();
@@ -55,10 +87,7 @@ void RodRoller::init() {
 void RodRoller::tick() {
   if (_encoder.tick()) {
     if (_encoder.turn() && _encoder.pressing()) {
-      int newRpm =
-          _stepperRPM + (_encoder.fast() ? fastStep() : 1) * _encoder.dir();
-      _stepperRPM = constrain(newRpm, MIN_RPM, MAX_RPM);
-      Timer2.setPeriod(delayFromRPM());
+      _stepper.rpm(_encoder.dir(), _encoder.fast());
       _state.on(_OLED_UPDATE_BIT);
     } else if (_encoder.turn()) {
       int dir = _debouncer.event(_encoder.dir());
@@ -68,10 +97,12 @@ void RodRoller::tick() {
         Serial.println(debug_buffer);
 #endif
         if (dir > 0) {
-          changeStepperDir<StepperDir::Toggle>();
+          _state.toggle(_STEPPER_DIR_BIT);
+          _stepper.dir(_state.is(_STEPPER_DIR_BIT));
           _state.on(_OLED_UPDATE_BIT);
         } else if (dir < 0) {
-          toggleStepper();
+          _state.toggle(_STEPPER_ENABLE_BIT);
+          _stepper.ena(_state.is(_STEPPER_ENABLE_BIT));
           _state.on(_OLED_UPDATE_BIT);
         }
 #ifdef MYDEBUG
@@ -87,16 +118,18 @@ void RodRoller::tick() {
 #endif
         if (dir) {
           if (dir > 0) {
-            changeStepperDir<StepperDir::Forward>();
+            _state.off(_STEPPER_DIR_BIT);
           } else {
-            changeStepperDir<StepperDir::Backward>();
+            _state.on(_STEPPER_DIR_BIT);
           }
+          _stepper.dir(_state.is(_STEPPER_DIR_BIT));
 #ifdef MYDEBUG
           sprintf(debug_buffer, "Stepper is off stepper dir %d",
                   _state.is(_STEPPER_DIR_BIT));
           Serial.println(debug_buffer);
 #endif
-          toggleStepper();
+          _state.toggle(_STEPPER_ENABLE_BIT);
+          _stepper.ena(_state.is(_STEPPER_ENABLE_BIT));
           _state.on(_OLED_UPDATE_BIT);
 #ifdef MYDEBUG
           sprintf(debug_buffer, "Off: Ena is %d dir %d state %d",
@@ -117,47 +150,10 @@ void RodRoller::tick() {
   }
 }
 
-inline uint32_t RodRoller::delayFromRPM() {
-  return ((uint32_t)60 * 1000 * 1000) / _stepperRPM / STEPS_PER_TURN /
-         2; // 50% duty cycle
-}
-
-template <StepperDir dir> void RodRoller::changeStepperDir() {
-  switch (dir) {
-  case StepperDir::Toggle:
-    _state.toggle(_STEPPER_DIR_BIT);
-    break;
-  case StepperDir::Forward:
-    _state.off(_STEPPER_DIR_BIT);
-    break;
-  case StepperDir::Backward:
-    _state.on(_STEPPER_DIR_BIT);
-    break;
-  default:
-    break;
-  }
-  digitalWrite(PIN_STEPPER_DIR, _state.is(_STEPPER_DIR_BIT));
-}
-
-void RodRoller::toggleStepper() {
-  _state.toggle(_STEPPER_ENABLE_BIT);
-  digitalWrite(PIN_STEPPER_ENA,
-               !(_state.is(_STEPPER_ENABLE_BIT))); // ENA has reversed logic.
-  if (_state.is(_STEPPER_ENABLE_BIT)) {
-    Timer2.restart();
-  } else {
-    Timer2.stop();
-  }
-}
-
-inline int RodRoller::fastStep() {
-  return _stepperRPM >= 20 ? 5 : (_stepperRPM > 10 ? 2 : 1);
-}
-
 void RodRoller::updateOLEDState() {
   char t[7];
   if (_state.is(_STEPPER_ENABLE_BIT)) {
-    sprintf(t, "%d RPM", _stepperRPM);
+    sprintf(t, "%d RPM", _stepper.currentRPM());
   } else {
     sprintf(t, " STOP ");
   }
